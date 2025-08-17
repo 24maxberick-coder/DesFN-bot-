@@ -6,11 +6,11 @@ from discord.ext import commands, tasks
 from collections import deque
 
 # ---- Setup ----
-TOKEN = os.getenv("DISCORD_TOKEN")
-OPENAI_KEY = os.getenv("OPENAI_API_KEY")
-NEWS_API_KEY = os.getenv("NEWS_API_KEY")  # optional, use https://newsapi.org
-NEWS_GUILD = os.getenv("NEWS_GUILD_NAME", "My News Server")
-NEWS_CHANNEL = os.getenv("NEWS_CHANNEL_NAME", "news")
+TOKEN = os.getenv("1406335185376510074")
+OPENAI_KEY = os.getenv("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")
+NEWS_API_KEY = os.getenv("5e467efe7e0a4705aecddea9f8aecb0b")  # optional, use https://newsapi.org
+NEWS_GUILD = os.getenv("Devlonix Studios", "My News Server")
+NEWS_CHANNEL = os.getenv("roblox-news🌍", "news")
 
 openai.api_key = OPENAI_KEY
 
