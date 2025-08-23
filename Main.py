@@ -1,141 +1,117 @@
 import discord
-from discord.ext import commands, tasks
-import asyncio
+from discord.ext import commands
+from difflib import get_close_matches
+import json
 import os
 
-TOKEN = os.getenv("DISCORD_TOKEN")
+# ---------------- CONFIG ---------------- #
+BOT_OWNER_NAME = "DesFN"  # Change to your Discord username
+CONFIG_FILE = "server_config.json"
 
+# ---------------- BOT SETUP -------------- #
 intents = discord.Intents.default()
-intents.message_content = True
+intents.guilds = True
 intents.members = True
+intents.messages = True
+intents.message_content = True  # required for listening to messages
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-bot = commands.Bot(command_prefix="/", intents=intents)
+# Load saved config
+if os.path.exists(CONFIG_FILE):
+    with open(CONFIG_FILE, "r") as f:
+        server_config = json.load(f)
+else:
+    server_config = {}
 
-# In-memory storage
-applications = {}  # {user_id: {"answers": str, "status": str, "approved_by": str}}
-reviewed = {}  # {message_id: [approvers]}
-app_channel_name = "application-review"
-news_channel_name = "roblox-news🌍"
+def save_config():
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(server_config, f, indent=4)
 
-OWNER_ROLES = ["Owner", "Co-Owner", "JRowner"]
-
-# -------------------- NEWS --------------------
-@bot.command()
-@commands.has_any_role(*OWNER_ROLES)
-async def news(ctx, *, announcement: str):
-    """Post news into the roblox-news🌍 channel"""
-    channel = discord.utils.get(ctx.guild.text_channels, name=news_channel_name)
-    if channel:
-        await channel.send(f"📰 **NEWS UPDATE:**\n{announcement}")
-        await ctx.send("✅ News posted!")
-    else:
-        await ctx.send("❌ News channel not found.")
-
-# -------------------- APPLY --------------------
-@bot.command()
-async def apply(ctx, *, answers: str):
-    """Submit an application"""
-    channel = discord.utils.get(ctx.guild.text_channels, name=app_channel_name)
-    if not channel:
-        await ctx.send("❌ Application review channel not found.")
-        return
-
-    embed = discord.Embed(title="New Application", description=answers, color=discord.Color.blue())
-    embed.set_footer(text=f"Applicant: {ctx.author} | ID: {ctx.author.id}")
-    msg = await channel.send(embed=embed)
-    await msg.add_reaction("✅")
-    await msg.add_reaction("❌")
-
-    applications[ctx.author.id] = {"answers": answers, "status": "Pending", "approved_by": None}
-    reviewed[msg.id] = []
-
-    await ctx.send("✅ Application submitted for review!")
-
-    # Auto-deny after 1 week if no full decision
-    async def auto_deny():
-        await asyncio.sleep(7 * 24 * 60 * 60)  # 7 days
-        if applications[ctx.author.id]["status"] == "Pending":
-            applications[ctx.author.id]["status"] = "Denied"
-            await ctx.author.send("❌ Your application has been automatically denied (no decision in 1 week).")
-    bot.loop.create_task(auto_deny())
-
-# -------------------- REACTION & VOTE --------------------
-@bot.event
-async def on_reaction_add(reaction, user):
-    if user.bot: return
-    if str(reaction.emoji) not in ["✅", "❌"]: return
-    if reaction.message.id not in reviewed: return
-
-    member = reaction.message.guild.get_member(user.id)
-    if not any(role.name in OWNER_ROLES for role in member.roles): return
-
-    if user.id in reviewed[reaction.message.id]: return  # already voted
-    reviewed[reaction.message.id].append(user.id)
-
-    applicant_id = int(reaction.message.embeds[0].footer.text.split("ID: ")[1])
-    decision = "Approved" if str(reaction.emoji) == "✅" else "Denied"
-
-    if decision == "Approved":
-        applications[applicant_id]["status"] = "Approved"
-        applications[applicant_id]["approved_by"] = user.name
-        await reaction.message.channel.send(f"✅ Application approved by {user.mention}")
-        applicant = await bot.fetch_user(applicant_id)
-        await applicant.send(f"🎉 Your application has been **approved** by {user.name}!")
-    else:
-        applications[applicant_id]["status"] = "Denied"
-        applications[applicant_id]["approved_by"] = user.name
-        await reaction.message.channel.send(f"❌ Application denied by {user.mention}")
-        applicant = await bot.fetch_user(applicant_id)
-        await applicant.send(f"❌ Your application has been **denied** by {user.name}.")
-
-# -------------------- MANUAL YES/NO REPLY --------------------
-@bot.event
-async def on_message(message):
-    if message.author.bot: return
-    if message.channel.name != app_channel_name: 
-        await bot.process_commands(message)
-        return
-
-    if message.content.lower() in ["yes", "no"]:
-        member = message.guild.get_member(message.author.id)
-        if not any(role.name in OWNER_ROLES for role in member.roles): 
-            return
-        if message.reference and message.reference.message_id in reviewed:
-            if message.author.id in reviewed[message.reference.message_id]: return
-            reviewed[message.reference.message_id].append(message.author.id)
-
-            applicant_id = int(message.reference.resolved.embeds[0].footer.text.split("ID: ")[1])
-            decision = "Approved" if message.content.lower() == "yes" else "Denied"
-
-            if decision == "Approved":
-                applications[applicant_id]["status"] = "Approved"
-                applications[applicant_id]["approved_by"] = message.author.name
-                await message.channel.send(f"✅ Application approved by {message.author.mention}")
-                applicant = await bot.fetch_user(applicant_id)
-                await applicant.send(f"🎉 Your application has been **approved** by {message.author.name}!")
-            else:
-                applications[applicant_id]["status"] = "Denied"
-                applications[applicant_id]["approved_by"] = message.author.name
-                await message.channel.send(f"❌ Application denied by {message.author.mention}")
-                applicant = await bot.fetch_user(applicant_id)
-                await applicant.send(f"❌ Your application has been **denied** by {message.author.name}!")
-    await bot.process_commands(message)
-
-# -------------------- APP HISTORY --------------------
-@bot.command()
-async def apphistory(ctx, member: discord.Member):
-    """Show history of a user's application"""
-    app = applications.get(member.id)
-    if not app:
-        await ctx.send("❌ No application history found.")
-        return
-    status = app['status']
-    approved_by = app['approved_by'] if app['approved_by'] else "N/A"
-    await ctx.send(f"📋 Application for {member.mention}\nStatus: **{status}**\nApproved by: **{approved_by}**")
-
-# -------------------- START --------------------
+# ---------------- EVENTS ----------------- #
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
 
-bot.run(TOKEN)
+@bot.event
+async def on_guild_join(guild):
+    """When bot joins a new server → ask owner which roles to track + news channel"""
+    owner = discord.utils.get(bot.get_all_members(), name=BOT_OWNER_NAME)
+    if not owner:
+        return
+    
+    roles_list = [role.name for role in guild.roles if role.name != "@everyone"]
+    channels_list = [channel.name for channel in guild.text_channels]
+
+    msg = f"👋 Joined **{guild.name}**\n\n**Roles:** {roles_list}\n\nWhich roles should I track? (comma separated)"
+    await owner.send(msg)
+
+    def check_role(m):
+        return m.author == owner and isinstance(m.channel, discord.DMChannel)
+
+    try:
+        reply = await bot.wait_for("message", check=check_role, timeout=120)
+        requested_roles = [r.strip() for r in reply.content.split(",")]
+
+        chosen_roles = {}
+        for r in requested_roles:
+            match = get_close_matches(r, roles_list, n=1, cutoff=0.3)
+            if match:
+                chosen_roles[r] = match[0]
+
+        server_config[str(guild.id)] = {
+            "roles": chosen_roles,
+            "news_channel": None,
+            "features": { "approvals": True, "logging": True }  # default features
+        }
+        save_config()
+
+        # Ask about news channel
+        await owner.send("Do you want a news channel? (reply with name or `no`)")
+        reply2 = await bot.wait_for("message", check=check_role, timeout=60)
+        if reply2.content.lower() != "no":
+            match = get_close_matches(reply2.content, channels_list, n=1, cutoff=0.3)
+            if match:
+                server_config[str(guild.id)]["news_channel"] = match[0]
+                save_config()
+
+    except Exception as e:
+        await owner.send(f"⚠️ Setup failed: {e}")
+
+# ---------------- ADAPTIVE SETTINGS -------------- #
+@bot.event
+async def on_message(message):
+    """Bot adapts when owner says 'don’t do this'"""
+    if message.author == bot.user:
+        return
+    
+    guild_id = str(message.guild.id) if message.guild else None
+
+    if message.mentions and bot.user in message.mentions:
+        if BOT_OWNER_NAME.lower() in message.author.name.lower():
+            content = message.content.lower()
+            if "don’t do" in content or "don't do" in content:
+                # Example: "@DesFN Bot I don't want you to do approvals"
+                for feature in server_config.get(guild_id, {}).get("features", {}):
+                    if feature in content:
+                        server_config[guild_id]["features"][feature] = False
+                        save_config()
+                        await message.channel.send(f"✅ Disabled `{feature}` feature as requested.")
+                        return
+            elif "do" in content:
+                # Example: "@DesFN Bot do logging"
+                for feature in server_config.get(guild_id, {}).get("features", {}):
+                    if feature in content:
+                        server_config[guild_id]["features"][feature] = True
+                        save_config()
+                        await message.channel.send(f"✅ Enabled `{feature}` feature as requested.")
+                        return
+    
+    await bot.process_commands(message)
+
+# ---------------- RUN -------------------- #
+if __name__ == "__main__":
+    TOKEN = os.getenv("DISCORD_TOKEN")  # put your key in .env or env var
+    if not TOKEN:
+        print("❌ No DISCORD_TOKEN found. Set it as an environment variable.")
+    else:
+        bot.run(TOKEN)
